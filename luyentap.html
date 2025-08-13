@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Luyện tập: Peptide & Protein (với AI)</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- D3.js for line drawing in Activity 2 -->
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f4f8;
+        }
+        .chem-bg {
+            background-color: #f0f4f8;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23dbeafe' fill-opacity='0.4'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+        .tab-active {
+            border-bottom-color: #3b82f6;
+            color: #3b82f6;
+            font-weight: 600;
+        }
+        .tab-inactive {
+            border-bottom-color: transparent;
+            color: #6b7280;
+        }
+        .tab-locked {
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+        .tube-content {
+            transition: all 0.5s ease-in-out;
+        }
+        .coagulated {
+            background-image: radial-gradient(circle, #ffffff 20%, transparent 21%),
+                              radial-gradient(circle, #ffffff 20%, transparent 21%);
+            background-size: 15px 15px;
+            background-position: 0 0, 7.5px 7.5px;
+            animation: coagulate-anim 1s forwards;
+        }
+        @keyframes coagulate-anim {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .matching-card.selected {
+            border-color: #3b82f6;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+            transform: scale(1.05);
+        }
+        .whitespace-pre-wrap {
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, serverTimestamp, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        // IMPORTANT: These variables are provided by the Canvas environment.
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'peptide-protein-app-vn';
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // Authenticate user
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                console.log("User is signed in with UID:", user.uid);
+                window.renderApp(db, auth);
+            } else {
+                console.log("User is signed out. Attempting to sign in.");
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    signInWithCustomToken(auth, __initial_auth_token).catch(error => {
+                        console.error("Error signing in with custom token:", error);
+                        signInAnonymously(auth); // Fallback to anonymous
+                    });
+                } else {
+                    signInAnonymously(auth).catch(error => {
+                        console.error("Error signing in anonymously:", error);
+                    });
+                }
+            }
+        });
+
+        window.db = db;
+        window.firebase = { firestore: { getFirestore, collection, query, onSnapshot, orderBy, addDoc, serverTimestamp } };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
+        
+        // --- Constants & Initial Data ---
+        const ACTIVITY_1_ID = 'activity1';
+        const ACTIVITY_2_ID = 'activity2';
+        const ACTIVITY_3_ID = 'activity3';
+
+        const initialTubes = {
+            gly_ala: { id: 'gly_ala', name: 'Gly-Ala', correctRack: 'dipeptide', position: null, color: 'bg-blue-200', coagulated: false, reaction: 'Không hiện tượng' },
+            gly_ala_val: { id: 'gly_ala_val', name: 'Gly-Ala-Val', correctRack: 'tripeptide', position: null, color: 'bg-blue-200', coagulated: false, biuret: true, reaction: 'Chưa thử' },
+            albumin: { id: 'albumin', name: 'Lòng trắng trứng', correctRack: 'protein', position: null, color: 'bg-yellow-100', coagulated: false, biuret: true, heat: true, reaction: 'Chưa thử' },
+        };
+
+        const racks = [
+            { id: 'dipeptide', label: 'Dipeptide' },
+            { id: 'tripeptide', label: 'Tripeptide (Phản ứng Biuret)' },
+            { id: 'protein', label: 'Protein (Phản ứng Biuret & Đông tụ)' },
+        ];
+        
+        const matchingItems = {
+            colA: [
+                { id: 'a1', content: 'Liên kết peptide', pair: 'b2' },
+                { id: 'a2', content: 'Phản ứng màu biuret', pair: 'b3' },
+                { id: 'a3', content: 'Peptide', pair: 'b1' },
+                { id: 'a4', content: 'Enzyme', pair: 'b5' },
+                { id: 'a5', content: 'Thủy phân hoàn toàn Protein', pair: 'b6' },
+                { id: 'a6', content: 'Sự đông tụ Protein', pair: 'b4' },
+            ],
+            colB: [
+                { id: 'b1', content: 'Được tạo thành từ các đơn vị α-amino acid.', pair: 'a3' },
+                { id: 'b2', content: 'Liên kết của nhóm -CO- với nhóm -NH- giữa hai đơn vị α-amino acid.', pair: 'a1' },
+                { id: 'b3', content: 'Cần có từ hai liên kết peptide trở lên để cho kết quả dương tính (màu tím).', pair: 'a2' },
+                { id: 'b4', content: 'Bị biến đổi cấu trúc khi đun nóng hoặc tác dụng với acid, base.', pair: 'a6' },
+                { id: 'b5', content: 'Là chất xúc tác sinh học, hầu hết có bản chất là protein.', pair: 'a4' },
+                { id: 'b6', content: 'Sản phẩm cuối cùng thu được là các α-amino acid.', pair: 'a5' },
+            ]
+        };
+
+        const quizQuestions = [
+            {
+                question: "Số liên kết peptide trong phân tử peptide Gly-Ala-Val-Gly là bao nhiêu?",
+                options: ["2", "4", "3", "1"],
+                answer: "3",
+                explanation: "Peptide này được tạo từ 4 gốc α-amino acid nên sẽ có (4-1) = 3 liên kết peptide."
+            },
+            {
+                question: "Khi thủy phân hoàn toàn protein đơn giản, sản phẩm thu được là:",
+                options: ["Polypeptide", "Các α-amino acid", "Amino acid", "Dipeptide"],
+                answer: "Các α-amino acid",
+                explanation: "Protein đơn giản được cấu thành từ các α-amino acid, do đó khi thủy phân hoàn toàn sẽ thu lại các α-amino acid."
+            },
+            {
+                question: "Có thể dùng thuốc thử nào sau đây để phân biệt dung dịch Gly-Ala và dung dịch Gly-Ala-Gly?",
+                options: ["Dung dịch HCl", "Dung dịch NaOH", "Cu(OH)2 trong môi trường kiềm", "Quỳ tím"],
+                answer: "Cu(OH)2 trong môi trường kiềm",
+                explanation: "Gly-Ala là dipeptide (có 1 liên kết peptide) không có phản ứng màu biuret. Gly-Ala-Gly là tripeptide (có 2 liên kết peptide) nên có phản ứng màu biuret tạo dung dịch màu tím."
+            },
+            {
+                question: "Phát biểu nào sau đây là sai?",
+                options: [
+                    "Dung dịch protein có phản ứng màu biuret.",
+                    "Protein bị thủy phân nhờ xúc tác acid hoặc enzyme.",
+                    "Anilin tác dụng với nước brom tạo kết tủa trắng.",
+                    "Tất cả các protein đều tan trong nước tạo thành dung dịch keo."
+                ],
+                answer: "Tất cả các protein đều tan trong nước tạo thành dung dịch keo.",
+                explanation: "Chỉ có các protein dạng hình cầu (như albumin) mới tan trong nước tạo dung dịch keo. Các protein dạng sợi (như keratin trong tóc, móng) không tan trong nước."
+            },
+            {
+                question: "Thủy phân không hoàn toàn tetrapeptide (X) mạch hở, thu được các dipeptide là Gly-Ala, Ala-Phe và tripeptide là Gly-Ala-Phe. Cấu trúc của (X) là:",
+                options: ["Gly-Ala-Phe-Val", "Val-Phe-Gly-Ala", "Ala-Phe-Val-Gly", "Gly-Ala-Val-Phe"],
+                answer: "Gly-Ala-Phe-Val",
+                explanation: "Dựa vào các sản phẩm thủy phân, ta có thể ghép nối: Gly-Ala và Ala-Phe cho thấy trình tự là Gly-Ala-Phe. Vì X là tetrapeptide, amino acid cuối cùng phải là Val để tạo thành Gly-Ala-Phe-Val."
+            },
+            {
+                question: "Trong dân gian, người ta thường dùng nước ép dứa hoặc đu đủ để ướp thịt trước khi nấu. Việc làm này có tác dụng gì?",
+                options: [
+                    "Làm thịt có vị ngọt hơn.",
+                    "Thêm vitamin cho món ăn.",
+                    "Khử mùi tanh của thịt.",
+                    "Giúp thịt nhanh mềm hơn do thủy phân protein."
+                ],
+                answer: "Giúp thịt nhanh mềm hơn do thủy phân protein.",
+                explanation: "Trong dứa và đu đủ có chứa các enzyme như bromelain và papain, chúng có khả năng thủy phân protein trong thịt, làm cho các sợi cơ ngắn lại và thịt sẽ mềm hơn khi nấu."
+            }
+        ];
+
+        // --- Gemini API Helper ---
+        const callGemini = async (prompt) => {
+            const apiKey = ""; // This will be handled by the execution environment.
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+            const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }] };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorBody = await response.json();
+                    console.error("Gemini API Error:", errorBody);
+                    return `Lỗi từ API: ${errorBody.error?.message || 'Không có thông tin chi tiết.'}`;
+                }
+
+                const result = await response.json();
+                
+                if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+                    return result.candidates[0].content.parts[0].text;
+                } else {
+                     if (result.promptFeedback?.blockReason) {
+                         return `Yêu cầu của bạn đã bị chặn vì: ${result.promptFeedback.blockReason}. Vui lòng thử lại với một nội dung khác.`;
+                    }
+                    console.error("Unexpected API response structure:", result);
+                    return "Không nhận được phản hồi hợp lệ từ AI.";
+                }
+            } catch (error) {
+                console.error("Fetch error:", error);
+                return "Đã xảy ra lỗi kết nối. Vui lòng kiểm tra mạng và thử lại.";
+            }
+        };
+
+        // --- Helper Components ---
+        const Icon = ({ path, className = "w-6 h-6" }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={path} />
+            </svg>
+        );
+
+        const Modal = ({ children, onClose }) => (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+                <div className="bg-white rounded-lg shadow-xl p-6 m-4 max-w-sm w-full text-center relative">
+                    <button onClick={onClose} className="absolute top-2 right-2 text-gray-400 hover:text-gray-600">
+                        <Icon path="M6 18L18 6M6 6l12 12" />
+                    </button>
+                    {children}
+                </div>
+            </div>
+        );
+
+        // --- Activity 1: Magic Lab ---
+        function Activity1({ onComplete, onRetry }) {
+            const [tubes, setTubes] = useState(JSON.parse(JSON.stringify(initialTubes)));
+            const [draggedItem, setDraggedItem] = useState(null);
+            const [message, setMessage] = useState('');
+
+            const handleDragStart = (e, item) => {
+                setDraggedItem(item);
+                e.dataTransfer.effectAllowed = 'move';
+            };
+
+            const handleDropOnTube = (e, tubeId) => {
+                e.preventDefault();
+                if (!draggedItem || !draggedItem.isReagent) return;
+
+                const tube = tubes[tubeId];
+                setTubes(prev => {
+                    const newTubes = { ...prev };
+                    if (draggedItem.id === 'biuret' && tube.biuret) {
+                        newTubes[tubeId].color = 'bg-purple-400';
+                        newTubes[tubeId].reaction = 'Hóa tím';
+                        setMessage(`Ống ${tube.name} chuyển màu tím!`);
+                    } else if (draggedItem.id === 'heat' && tube.heat) {
+                        newTubes[tubeId].coagulated = true;
+                        newTubes[tubeId].reaction = 'Đông tụ';
+                        setMessage(`Ống ${tube.name} bị đông tụ!`);
+                    } else {
+                        setMessage(`Không có phản ứng xảy ra với ống ${tube.name}.`);
+                    }
+                    return newTubes;
+                });
+                setTimeout(() => setMessage(''), 2000);
+            };
+
+            const handleDropOnRack = (e, rackId) => {
+                e.preventDefault();
+                if (!draggedItem || draggedItem.isReagent) return;
+
+                const tubeId = draggedItem.id;
+                const tube = tubes[tubeId];
+                if (tube.correctRack === rackId) {
+                    setTubes(prev => ({ ...prev, [tubeId]: { ...prev[tubeId], position: rackId } }));
+                    setMessage(`Chính xác! ${tube.name} đã được đặt đúng vị trí.`);
+                } else {
+                    setMessage(`Sai rồi! Vị trí này không phù hợp với ${tube.name}.`);
+                }
+                setTimeout(() => setMessage(''), 2000);
+            };
+
+            const handleDragOver = (e) => e.preventDefault();
+            
+            const placedTubesCount = Object.values(tubes).filter(t => t.position).length;
+            const isComplete = placedTubesCount === 3; // UPDATED from 4 to 3
+
+            useEffect(() => {
+                if (isComplete) {
+                    setMessage('Tuyệt vời! Bạn đã hoàn thành phòng thí nghiệm!');
+                    onComplete(ACTIVITY_1_ID, 100);
+                }
+            }, [isComplete, onComplete]);
+            
+            const handleLocalRetry = () => {
+                setTubes(JSON.parse(JSON.stringify(initialTubes)));
+                setMessage('');
+                onRetry(ACTIVITY_1_ID);
+            }
+
+            return (
+                <div className="p-4 md:p-6 bg-white/60 backdrop-blur-sm rounded-lg shadow-lg">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">Hoạt động 1: Phòng Thí Nghiệm Diệu Kỳ 🧪</h3>
+                    <p className="text-gray-600 mb-4">Kéo thuốc thử vào ống nghiệm để quan sát phản ứng, sau đó kéo ống nghiệm vào đúng giá đỡ.</p>
+                    
+                    {message && <div className="p-3 mb-4 text-center text-sm font-semibold text-white bg-blue-500 rounded-lg shadow-md">{message}</div>}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="lg:col-span-1 space-y-6">
+                            <div className="bg-white p-4 rounded-lg shadow">
+                                <h4 className="font-semibold mb-2">Thuốc thử</h4>
+                                <div className="flex space-x-4">
+                                    <div id="biuret" draggable onDragStart={(e) => handleDragStart(e, { id: 'biuret', isReagent: true })} className="cursor-grab p-2 text-center">
+                                        <div className="w-16 h-16 mx-auto bg-cyan-500 rounded-full flex items-center justify-center text-white font-bold text-xs shadow-inner">Cu(OH)₂</div>
+                                        <p className="text-sm mt-1">Biuret</p>
+                                    </div>
+                                    <div id="heat" draggable onDragStart={(e) => handleDragStart(e, { id: 'heat', isReagent: true })} className="cursor-grab p-2 text-center">
+                                        <Icon path="M15.364 5.025A9.96 9.96 0 0112 3c-1.636 0-3.18.39-4.57.996M15 1.5l-1.5 3M9 1.5l1.5 3M12 21a9 9 0 110-18 9 9 0 010 18z" className="w-16 h-16 mx-auto text-red-500"/>
+                                        <p className="text-sm mt-1">Đun nóng</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="bg-white p-4 rounded-lg shadow">
+                                <h4 className="font-semibold mb-2">Ống nghiệm chưa phân loại</h4>
+                                <div className="flex flex-wrap justify-center gap-2">
+                                    {Object.values(tubes).filter(t => !t.position).map(tube => (
+                                        <div key={tube.id} draggable onDragStart={(e) => handleDragStart(e, tube)} onDrop={(e) => handleDropOnTube(e, tube.id)} onDragOver={handleDragOver} className="cursor-grab p-2 text-center">
+                                            <div className="w-12 h-24 border-2 border-gray-400 rounded-b-lg rounded-t-sm relative mx-auto">
+                                                <div className={`absolute bottom-0 left-0 right-0 h-3/4 rounded-b-md tube-content ${tube.color} ${tube.coagulated ? 'coagulated' : ''}`}></div>
+                                            </div>
+                                            <p className="text-xs mt-1">{tube.name}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="lg:col-span-2 bg-white p-4 rounded-lg shadow">
+                            <h4 className="font-semibold mb-4 text-center">Giá đỡ</h4>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                {racks.map(rack => (
+                                    <div key={rack.id} onDrop={(e) => handleDropOnRack(e, rack.id)} onDragOver={handleDragOver} className="bg-gray-200 p-3 rounded-lg min-h-[200px] flex flex-col items-center border-2 border-dashed border-gray-400">
+                                        <h5 className="text-sm font-bold text-center mb-2">{rack.label}</h5>
+                                        {Object.values(tubes).filter(t => t.position === rack.id).map(tube => (
+                                            <div key={tube.id} className="p-2 text-center">
+                                                <div className="w-12 h-24 border-2 border-gray-400 rounded-b-lg rounded-t-sm relative mx-auto">
+                                                    <div className={`absolute bottom-0 left-0 right-0 h-3/4 rounded-b-md tube-content ${tube.color} ${tube.coagulated ? 'coagulated' : ''}`}></div>
+                                                </div>
+                                                <p className="text-xs mt-1">{tube.name}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-6 flex justify-end">
+                        <button onClick={handleLocalRetry} className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg transition">
+                            Làm lại
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Activity 2: Knowledge Puzzle ---
+        function Activity2({ onComplete, onRetry }) {
+            const [cards, setCards] = useState({
+                colA: matchingItems.colA.map(c => ({...c, order: Math.random()})).sort((a, b) => a.order - b.order),
+                colB: matchingItems.colB.map(c => ({...c, order: Math.random()})).sort((a, b) => a.order - b.order)
+            });
+            const [selected, setSelected] = useState(null);
+            const [pairs, setPairs] = useState([]);
+            const [message, setMessage] = useState('');
+            const svgRef = useRef(null);
+            const cardRefs = useRef({});
+
+            const handleCardClick = (card, col) => {
+                if (pairs.some(p => p.includes(card.id))) return;
+
+                if (!selected) {
+                    setSelected({ ...card, col });
+                } else if (selected.col !== col) {
+                    if (selected.pair === card.id) {
+                        setPairs(prev => [...prev, [selected.id, card.id]]);
+                        setMessage('Chính xác!');
+                    } else {
+                        setMessage('Chưa đúng, hãy thử lại!');
+                    }
+                    setSelected(null);
+                    setTimeout(() => setMessage(''), 1500);
+                } else {
+                    setSelected({ ...card, col });
+                }
+            };
+
+            useEffect(() => {
+                if (pairs.length === cards.colA.length) {
+                    setMessage('Xuất sắc! Bạn đã ghép đúng tất cả các cặp.');
+                    onComplete(ACTIVITY_2_ID, 100);
+                }
+            }, [pairs, cards.colA.length, onComplete]);
+            
+            useEffect(() => {
+                const svg = d3.select(svgRef.current);
+                svg.selectAll("*").remove();
+                
+                pairs.forEach(pair => {
+                    const startNode = cardRefs.current[pair[0]];
+                    const endNode = cardRefs.current[pair[1]];
+                    if (startNode && endNode) {
+                        const startPos = { x: startNode.offsetLeft + startNode.offsetWidth, y: startNode.offsetTop + startNode.offsetHeight / 2 };
+                        const endPos = { x: endNode.offsetLeft, y: endNode.offsetTop + endNode.offsetHeight / 2 };
+                        
+                        svg.append("line")
+                            .attr("x1", startPos.x)
+                            .attr("y1", startPos.y)
+                            .attr("x2", endPos.x)
+                            .attr("y2", endPos.y)
+                            .attr("stroke", "#22c55e")
+                            .attr("stroke-width", 3);
+                    }
+                });
+            }, [pairs, cards]);
+
+            const handleLocalRetry = () => {
+                setCards({
+                    colA: matchingItems.colA.map(c => ({...c, order: Math.random()})).sort((a, b) => a.order - b.order),
+                    colB: matchingItems.colB.map(c => ({...c, order: Math.random()})).sort((a, b) => a.order - b.order)
+                });
+                setSelected(null);
+                setPairs([]);
+                setMessage('');
+                onRetry(ACTIVITY_2_ID);
+            };
+
+            return (
+                <div className="p-4 md:p-6 bg-white/60 backdrop-blur-sm rounded-lg shadow-lg">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">Hoạt động 2: Mảnh Ghép Tri Thức 🧩</h3>
+                    <p className="text-gray-600 mb-4">Nối các thẻ ở Cột A với các thẻ mô tả tương ứng ở Cột B.</p>
+                    
+                    {message && <div className={`p-3 mb-4 text-center text-sm font-semibold text-white ${message.includes('Chính xác') || message.includes('Xuất sắc') ? 'bg-green-500' : 'bg-red-500'} rounded-lg shadow-md`}>{message}</div>}
+
+                    <div className="relative">
+                        <svg ref={svgRef} className="absolute top-0 left-0 w-full h-full pointer-events-none z-0"></svg>
+                        <div className="grid grid-cols-2 gap-4 md:gap-8 relative z-10">
+                            <div className="space-y-3">
+                                {cards.colA.map(card => (
+                                    <div key={card.id} ref={el => cardRefs.current[card.id] = el}
+                                        onClick={() => handleCardClick(card, 'A')}
+                                        className={`p-4 bg-white rounded-lg shadow-md border-2 transition-all cursor-pointer h-24 flex items-center justify-center text-center
+                                            ${selected?.id === card.id ? 'matching-card selected' : 'border-transparent'}
+                                            ${pairs.some(p => p.includes(card.id)) ? 'bg-green-100 border-green-300' : 'hover:border-blue-400'}`}>
+                                        <p className="font-semibold text-gray-700">{card.content}</p>
+                                    </div>
+                                ))}
+                            </div>
+                            <div className="space-y-3">
+                                {cards.colB.map(card => (
+                                    <div key={card.id} ref={el => cardRefs.current[card.id] = el}
+                                        onClick={() => handleCardClick(card, 'B')}
+                                        className={`p-4 bg-white rounded-lg shadow-md border-2 transition-all cursor-pointer h-24 flex items-center justify-center text-center
+                                            ${selected?.id === card.id ? 'matching-card selected' : 'border-transparent'}
+                                            ${pairs.some(p => p.includes(card.id)) ? 'bg-green-100 border-green-300' : 'hover:border-blue-400'}`}>
+                                        <p className="text-gray-600">{card.content}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="mt-6 flex justify-end">
+                        <button onClick={handleLocalRetry} className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg transition">
+                            Làm lại
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Activity 3: Conquer Knowledge ---
+        function Activity3({ onComplete, onRetry }) {
+            const [answers, setAnswers] = useState({});
+            const [submitted, setSubmitted] = useState(false);
+            const [aiExplanations, setAiExplanations] = useState({});
+
+            const handleOptionChange = (qIndex, option) => {
+                if (submitted) return;
+                setAnswers(prev => ({ ...prev, [qIndex]: option }));
+            };
+
+            const handleSubmit = () => {
+                setSubmitted(true);
+                const score = quizQuestions.reduce((acc, q, i) => acc + (answers[i] === q.answer ? 1 : 0), 0);
+                const percentage = (score / quizQuestions.length) * 100;
+                onComplete(ACTIVITY_3_ID, percentage, answers);
+            };
+            
+            const handleLocalRetry = () => {
+                setAnswers({});
+                setSubmitted(false);
+                setAiExplanations({});
+                onRetry(ACTIVITY_3_ID);
+            };
+            
+            const handleGenerateExplanation = async (qIndex) => {
+                const q = quizQuestions[qIndex];
+                setAiExplanations(prev => ({ ...prev, [qIndex]: { loading: true, text: '' } }));
+
+                const prompt = `Với vai trò là một gia sư Hóa học, hãy giải thích sâu hơn về câu hỏi và đáp án sau đây cho học sinh lớp 12 một cách dễ hiểu. Tập trung vào lý do tại sao đáp án này đúng và các đáp án khác sai. Sử dụng gạch đầu dòng hoặc định dạng rõ ràng.
+                ---
+                Câu hỏi: "${q.question}"
+                Đáp án đúng: "${q.answer}"
+                Giải thích gốc: "${q.explanation}"
+                ---
+                Hãy cung cấp một lời giải thích chi tiết và sâu sắc hơn.`;
+
+                const result = await callGemini(prompt);
+                setAiExplanations(prev => ({ ...prev, [qIndex]: { loading: false, text: result } }));
+            };
+            
+            const score = useMemo(() => {
+                if (!submitted) return 0;
+                return quizQuestions.reduce((acc, q, i) => acc + (answers[i] === q.answer ? 1 : 0), 0);
+            }, [submitted, answers]);
+
+            return (
+                <div className="p-4 md:p-6 bg-white/60 backdrop-blur-sm rounded-lg shadow-lg">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">Hoạt động 3: Chinh Phục Kiến Thức 🏆</h3>
+                    <p className="text-gray-600 mb-4">Chọn đáp án đúng cho các câu hỏi sau.</p>
+                    
+                    <div className="space-y-6">
+                        {quizQuestions.map((q, qIndex) => (
+                            <div key={qIndex} className={`p-4 rounded-lg bg-white shadow-md transition-all ${submitted ? (answers[qIndex] === q.answer ? 'border-l-4 border-green-500' : 'border-l-4 border-red-500') : ''}`}>
+                                <p className="font-semibold mb-3">{`Câu ${qIndex + 1}: ${q.question}`}</p>
+                                <div className="space-y-2">
+                                    {q.options.map((option, oIndex) => {
+                                        const isCorrect = q.answer === option;
+                                        const isSelected = answers[qIndex] === option;
+                                        let optionClass = "border-gray-300";
+                                        if (submitted) {
+                                            if (isCorrect) optionClass = "bg-green-100 border-green-400";
+                                            else if (isSelected) optionClass = "bg-red-100 border-red-400";
+                                        }
+                                        return (
+                                            <label key={oIndex} className={`flex items-center p-3 border rounded-lg cursor-pointer transition ${optionClass}`}>
+                                                <input type="radio" name={`question-${qIndex}`} value={option} checked={isSelected} onChange={() => handleOptionChange(qIndex, option)} disabled={submitted} className="mr-3"/>
+                                                <span>{option}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                                {submitted && (
+                                    <>
+                                        <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
+                                            <p><strong>Đáp án đúng:</strong> {q.answer}</p>
+                                            <p><strong>Giải thích:</strong> {q.explanation}</p>
+                                        </div>
+                                        <div className="mt-2">
+                                            {!aiExplanations[qIndex]?.text && !aiExplanations[qIndex]?.loading && (
+                                                <button onClick={() => handleGenerateExplanation(qIndex)} className="text-sm text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1">
+                                                    ✨ Giải thích sâu hơn với AI
+                                                </button>
+                                            )}
+                                            {aiExplanations[qIndex]?.loading && <p className="text-sm text-gray-500 animate-pulse">AI đang soạn giải thích...</p>}
+                                            {aiExplanations[qIndex]?.text && (
+                                                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-gray-800 whitespace-pre-wrap">
+                                                    <h4 className="font-bold mb-1 text-blue-700">✨ Giải thích từ AI:</h4>
+                                                    {aiExplanations[qIndex].text}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-6 flex justify-between items-center">
+                        <button onClick={handleLocalRetry} className="bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 px-4 rounded-lg transition">
+                            Làm lại
+                        </button>
+                        {!submitted ? (
+                            <button onClick={handleSubmit} disabled={Object.keys(answers).length !== quizQuestions.length} className="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition disabled:bg-gray-400">
+                                Nộp bài
+                            </button>
+                        ) : (
+                            <div className="text-lg font-bold text-blue-600">
+                                Điểm của bạn: {score} / {quizQuestions.length}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- Main Pages ---
+        function LoginPage({ onLogin }) {
+            const [name, setName] = useState('');
+            const [className, setClassName] = useState('');
+
+            const handleSubmit = (e) => {
+                e.preventDefault();
+                if (name.trim() && className.trim()) {
+                    onLogin({ name: name.trim(), className: className.trim() });
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center chem-bg p-4">
+                    <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 space-y-6">
+                        <div className="text-center">
+                             <svg className="mx-auto h-12 w-12 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                                <path d="M14.25 6.087c0-.66.537-1.197 1.197-1.197h.006c.66 0 1.197.537 1.197 1.197v7.626c0 .66-.537 1.197-1.197 1.197h-.006a1.197 1.197 0 01-1.197-1.197V6.087zM6.75 12h.008v.008H6.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM4.5 9.75v-.008h-.008V9.75h.008zm0-.375a.375.375 0 11-.75 0 .375.375 0 01.75 0zM12 3.75v.008h.008V3.75H12zm0-.375a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                                <path d="M6.828 12.75h7.344a2.25 2.25 0 012.25 2.25v1.5a2.25 2.25 0 002.25 2.25h.01a2.25 2.25 0 002.25-2.25v-1.5a2.25 2.25 0 012.25-2.25h.008a2.25 2.25 0 012.25 2.25v1.5a2.25 2.25 0 002.25 2.25h.01a2.25 2.25 0 002.25-2.25v-1.5a2.25 2.25 0 012.25-2.25h.008a2.25 2.25 0 012.25 2.25v1.5a2.25 2.25 0 002.25 2.25h.01M15 18.75a.375.375 0 11-1.5 0 .375.375 0 011.5 0z" />
+                            </svg>
+                            <h1 className="text-3xl font-extrabold text-gray-800 mt-2">Luyện tập: Peptide & Protein</h1>
+                            <p className="text-gray-500 mt-2">Nhập thông tin để bắt đầu</p>
+                        </div>
+                        <form onSubmit={handleSubmit} className="space-y-4">
+                            <div>
+                                <label htmlFor="name" className="text-sm font-medium text-gray-700">Họ và tên</label>
+                                <input id="name" type="text" value={name} onChange={e => setName(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
+                            </div>
+                            <div>
+                                <label htmlFor="className" className="text-sm font-medium text-gray-700">Lớp</label>
+                                <input id="className" type="text" value={className} onChange={e => setClassName(e.target.value)} required className="mt-1 block w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
+                            </div>
+                            <button type="submit" className="w-full flex justify-center py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition">
+                                Bắt đầu
+                            </button>
+                        </form>
+                        <p className="text-xs text-center text-gray-400">GV đăng nhập với Họ tên: 123456, Lớp: GV</p>
+                    </div>
+                </div>
+            );
+        }
+
+        function PracticePage({ user, onCompleteAll, onLogout }) {
+            const [activeTab, setActiveTab] = useState(ACTIVITY_1_ID);
+            const [completion, setCompletion] = useState({ [ACTIVITY_1_ID]: false, [ACTIVITY_2_ID]: false, [ACTIVITY_3_ID]: false });
+            const [scores, setScores] = useState({ [ACTIVITY_1_ID]: 0, [ACTIVITY_2_ID]: 0, [ACTIVITY_3_ID]: 0 });
+            const [retries, setRetries] = useState({ [ACTIVITY_1_ID]: 0, [ACTIVITY_2_ID]: 0, [ACTIVITY_3_ID]: 0 });
+            const [quizAnswers, setQuizAnswers] = useState(null);
+            const [startTime] = useState(Date.now());
+            const [unlockModal, setUnlockModal] = useState(null);
+
+            const handleActivityComplete = useCallback((activityId, score, details) => {
+                setCompletion(prev => ({ ...prev, [activityId]: true }));
+                setScores(prev => ({ ...prev, [activityId]: score }));
+
+                if (activityId === ACTIVITY_3_ID && details) {
+                    setQuizAnswers(details);
+                }
+
+                let nextActivity = null;
+                if (activityId === ACTIVITY_1_ID) nextActivity = ACTIVITY_2_ID;
+                if (activityId === ACTIVITY_2_ID) nextActivity = ACTIVITY_3_ID;
+                
+                if (nextActivity) {
+                    setUnlockModal({ title: `Hoạt động ${parseInt(nextActivity.slice(-1))} đã được mở khóa!`, next: nextActivity });
+                }
+            }, []);
+            
+            const handleRetry = useCallback((activityId) => {
+                setScores(prev => ({...prev, [activityId]: 0}));
+                setRetries(prev => ({...prev, [activityId]: prev[activityId] + 1}));
+                setCompletion(prev => ({...prev, [activityId]: false}));
+                if(activityId === ACTIVITY_3_ID) {
+                    setQuizAnswers(null);
+                }
+            }, []);
+
+            const closeUnlockModal = () => {
+                if (unlockModal) {
+                    setActiveTab(unlockModal.next);
+                }
+                setUnlockModal(null);
+            };
+
+            const allComplete = Object.values(completion).every(Boolean);
+            useEffect(() => {
+                if (allComplete) {
+                    const totalTime = Math.round((Date.now() - startTime) / 1000);
+                    onCompleteAll({ scores, retries, totalTime, quizAnswers });
+                }
+            }, [allComplete, quizAnswers, onCompleteAll, scores, retries, startTime]);
+
+            const tabs = [
+                { id: ACTIVITY_1_ID, name: 'HĐ 1: Phòng Thí Nghiệm', locked: false },
+                { id: ACTIVITY_2_ID, name: 'HĐ 2: Ghép Cặp', locked: !completion[ACTIVITY_1_ID] },
+                { id: ACTIVITY_3_ID, name: 'HĐ 3: Trắc Nghiệm', locked: !completion[ACTIVITY_2_ID] },
+            ];
+
+            return (
+                <div className="min-h-screen chem-bg p-4 sm:p-6 lg:p-8">
+                    {unlockModal && (
+                        <Modal onClose={closeUnlockModal}>
+                            <div className="text-center">
+                                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-green-100">
+                                    <Icon path="M4.5 12.75l6 6 9-13.5" className="h-6 w-6 text-green-600" />
+                                </div>
+                                <h3 className="text-lg leading-6 font-medium text-gray-900 mt-4">{unlockModal.title}</h3>
+                                <div className="mt-2 px-7 py-3">
+                                    <p className="text-sm text-gray-500">Hãy chuyển sang hoạt động tiếp theo để chinh phục thử thách mới.</p>
+                                </div>
+                                <div className="items-center px-4 py-3">
+                                    <button onClick={closeUnlockModal} className="px-4 py-2 bg-blue-500 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-300">
+                                        Tiếp tục
+                                    </button>
+                                </div>
+                            </div>
+                        </Modal>
+                    )}
+                    <div className="max-w-7xl mx-auto">
+                        <header className="flex justify-between items-center mb-6 p-4 bg-white/50 backdrop-blur-sm rounded-lg shadow">
+                            <div>
+                                <h1 className="text-2xl font-bold text-gray-900">Chào, {user.name}!</h1>
+                                <p className="text-gray-600">Lớp: {user.className}</p>
+                            </div>
+                            <button onClick={onLogout} className="text-sm font-medium text-gray-500 hover:text-gray-700">Đăng xuất</button>
+                        </header>
+
+                        <div className="border-b border-gray-200">
+                            <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+                                {tabs.map(tab => (
+                                    <button
+                                        key={tab.name}
+                                        onClick={() => !tab.locked && setActiveTab(tab.id)}
+                                        className={`py-4 px-3 bg-white/50 rounded-t-lg transition-colors duration-200
+                                            ${tab.locked ? 'tab-locked' : (activeTab === tab.id ? 'tab-active' : 'tab-inactive hover:border-gray-300 hover:text-gray-700')}
+                                        `}
+                                        disabled={tab.locked}
+                                    >
+                                        {tab.locked && <Icon path="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" className="inline-block w-4 h-4 mr-1"/>}
+                                        {tab.name}
+                                    </button>
+                                ))}
+                            </nav>
+                        </div>
+
+                        <div className="mt-0">
+                            {activeTab === ACTIVITY_1_ID && <Activity1 onComplete={handleActivityComplete} onRetry={handleRetry} />}
+                            {activeTab === ACTIVITY_2_ID && <Activity2 onComplete={handleActivityComplete} onRetry={handleRetry} />}
+                            {activeTab === ACTIVITY_3_ID && <Activity3 onComplete={handleActivityComplete} onRetry={handleRetry} />}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        function SummaryPage({ user, results, onRestart, onSave }) {
+            const [studyPlan, setStudyPlan] = useState('');
+            const [isLoadingPlan, setIsLoadingPlan] = useState(false);
+
+            const totalScore = Object.values(results.scores).reduce((a, b) => a + b, 0);
+            const averageScore = totalScore / 3;
+            const totalActivityRetries = Object.values(results.retries).reduce((a, b) => a + b, 0);
+            const totalQuizCorrect = Math.round(results.scores.activity3 / 100 * quizQuestions.length);
+            
+            const handleSave = () => {
+                const finalData = {
+                    name: user.name,
+                    className: user.className,
+                    score: parseFloat(averageScore.toFixed(2)),
+                    correctAnswers: totalQuizCorrect,
+                    totalTime: results.totalTime
+                };
+                onSave(finalData);
+            };
+
+            const handleGeneratePlan = async () => {
+                setIsLoadingPlan(true);
+
+                const incorrectQuestionsInfo = quizQuestions
+                    .map((q, i) => ({ ...q, userAnswer: results.quizAnswers ? results.quizAnswers[i] : null }))
+                    .filter(q => q.userAnswer && q.userAnswer !== q.answer);
+
+                if (incorrectQuestionsInfo.length === 0) {
+                    setStudyPlan("🎉 Chúc mừng! Bạn đã trả lời đúng tất cả các câu hỏi trắc nghiệm. Kiến thức của bạn về phần này rất vững chắc. Hãy tiếp tục phát huy nhé!");
+                    setIsLoadingPlan(false);
+                    return;
+                }
+
+                const prompt = `Với vai trò là một gia sư Hóa học tận tâm, hãy tạo một kế hoạch ôn tập cá nhân hóa cho một học sinh lớp 12. Học sinh này đã trả lời sai các câu hỏi sau:
+                ---
+                ${incorrectQuestionsInfo.map((q, i) => 
+                    `Câu sai ${i + 1}:
+                    - Câu hỏi: ${q.question}
+                    - Đáp án của học sinh: ${q.userAnswer}
+                    - Đáp án đúng: ${q.answer}`
+                ).join('\n\n')}
+                ---
+                Dựa trên những lỗi sai này, hãy:
+                1.  Xác định các chủ đề/khái niệm chính mà học sinh chưa nắm vững.
+                2.  Đưa ra một kế hoạch ôn tập ngắn gọn, rõ ràng theo từng chủ đề.
+                3.  Trong mỗi chủ đề, giải thích lại khái niệm cốt lõi một cách đơn giản.
+                4.  Đưa ra 1-2 câu hỏi ví dụ tương tự để học sinh tự luyện tập.
+                Trình bày thật thân thiện, khích lệ và sử dụng markdown để định dạng cho dễ đọc (gạch đầu dòng, in đậm).`;
+
+                const result = await callGemini(prompt);
+                setStudyPlan(result);
+                setIsLoadingPlan(false);
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center chem-bg p-4">
+                    <div className="w-full max-w-3xl bg-white rounded-2xl shadow-xl p-8">
+                        <div className="text-center">
+                            <h1 className="text-3xl font-extrabold text-gray-800">Hoàn thành!</h1>
+                            <p className="text-gray-600 mt-2">Chúc mừng {user.name}, bạn đã hoàn thành tất cả các hoạt động.</p>
+                        </div>
+
+                        <div className="mt-8 bg-gray-50 p-6 rounded-lg">
+                            <h2 className="text-xl font-bold text-gray-700 mb-4">Bảng tổng kết kết quả</h2>
+                            <div className="grid grid-cols-2 gap-4 text-gray-600">
+                                <div className="p-4 bg-white rounded-lg shadow-sm"><p className="text-sm">Điểm trung bình</p><p className="text-2xl font-bold text-blue-600">{averageScore.toFixed(2)}</p></div>
+                                <div className="p-4 bg-white rounded-lg shadow-sm"><p className="text-sm">Tổng thời gian</p><p className="text-2xl font-bold text-blue-600">{results.totalTime} giây</p></div>
+                                <div className="p-4 bg-white rounded-lg shadow-sm"><p className="text-sm">Số câu trắc nghiệm đúng</p><p className="text-2xl font-bold text-blue-600">{totalQuizCorrect} / {quizQuestions.length}</p></div>
+                                <div className="p-4 bg-white rounded-lg shadow-sm"><p className="text-sm">Tổng số lần làm lại</p><p className="text-2xl font-bold text-blue-600">{totalActivityRetries + results.totalRetries}</p></div>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-8 text-center">
+                            <div>
+                                {!studyPlan && !isLoadingPlan && (
+                                    <button onClick={handleGeneratePlan} className="bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition transform hover:scale-105 flex items-center gap-2 mx-auto">
+                                        ✨ Tạo kế hoạch ôn tập cá nhân
+                                    </button>
+                                )}
+                                <p className="text-xs text-gray-500 mt-2">AI sẽ phân tích kết quả các câu bạn đã làm sai để tạo ra lộ trình ôn tập phù hợp nhất cho riêng bạn.</p>
+                            </div>
+                            {isLoadingPlan && <p className="text-center text-gray-600 animate-pulse">AI đang xây dựng kế hoạch ôn tập cho bạn...</p>}
+                            {studyPlan && (
+                                <div className="mt-4 p-6 bg-blue-50 border border-blue-200 rounded-lg text-gray-800 whitespace-pre-wrap text-left">
+                                    <h3 className="text-lg font-bold mb-2 text-blue-800">✨ Kế hoạch ôn tập của bạn:</h3>
+                                    <div dangerouslySetInnerHTML={{ __html: studyPlan.replace(/\n/g, '<br />').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\* (.*?)(<br \/>|$)/g, '<li>$1</li>') }} />
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="mt-8 flex flex-col sm:flex-row justify-center gap-4">
+                            <button onClick={onRestart} className="w-full sm:w-auto flex justify-center py-3 px-6 border border-gray-300 rounded-lg shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition">
+                                Làm lại từ đầu
+                            </button>
+                            <button onClick={handleSave} className="w-full sm:w-auto flex justify-center py-3 px-6 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 transition">
+                                Hoàn thành & Lưu kết quả
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        function TeacherPage({ onLogout }) {
+            const [studentData, setStudentData] = useState([]);
+            const [error, setError] = useState(null);
+
+            useEffect(() => {
+                if (!window.db) {
+                    setError("Kết nối cơ sở dữ liệu thất bại.");
+                    return;
+                }
+                const { getFirestore, collection, query, onSnapshot, orderBy } = window.firebase.firestore;
+                
+                const db = getFirestore();
+                const q = query(collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'peptide-protein-app-vn'}/public/data/student_results`), orderBy("submittedAt", "desc"));
+
+                const unsubscribe = onSnapshot(q, (querySnapshot) => {
+                    const data = [];
+                    querySnapshot.forEach((doc) => {
+                        const docData = doc.data();
+                        data.push({ 
+                            id: doc.id,
+                            ...docData,
+                            submittedAt: docData.submittedAt?.toDate ? docData.submittedAt.toDate().toLocaleString('vi-VN') : 'Không có'
+                        });
+                    });
+                    setStudentData(data);
+                }, (err) => {
+                    console.error("Error fetching data: ", err);
+                    setError("Không thể tải dữ liệu của học sinh. Vui lòng kiểm tra kết nối và cấu hình Firebase.");
+                });
+
+                return () => unsubscribe();
+            }, []);
+
+            return (
+                <div className="min-h-screen chem-bg p-4 sm:p-6 lg:p-8">
+                    <div className="max-w-7xl mx-auto">
+                        <header className="flex justify-between items-center mb-6 p-4 bg-white/50 backdrop-blur-sm rounded-lg shadow">
+                            <h1 className="text-2xl font-bold text-gray-900">Trang giáo viên</h1>
+                            <button onClick={onLogout} className="text-sm font-medium text-blue-600 hover:text-blue-800">Đăng xuất</button>
+                        </header>
+                        
+                        {error && <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert"><p>{error}</p></div>}
+
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Họ và tên</th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lớp</th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Điểm TB</th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Câu đúng</th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Thời gian (giây)</th>
+                                            <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Thời gian nộp</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {studentData.length > 0 ? studentData.map((data) => (
+                                            <tr key={data.id} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{data.name}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{data.className}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{data.score}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{data.correctAnswers} / {quizQuestions.length}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{data.totalTime}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{data.submittedAt}</td>
+                                            </tr>
+                                        )) : (
+                                            <tr>
+                                                <td colSpan="6" className="px-6 py-4 text-center text-sm text-gray-500">Chưa có dữ liệu nào của học sinh.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // --- App Component ---
+        function App() {
+            const [page, setPage] = useState('login'); // login, practice, summary, teacher
+            const [user, setUser] = useState(null);
+            const [results, setResults] = useState(null);
+            const [saveMessage, setSaveMessage] = useState('');
+            const [totalRetries, setTotalRetries] = useState(0);
+
+            const handleLogin = (userInfo) => {
+                if (userInfo.name === '123456' && userInfo.className === 'GV') {
+                    setUser(userInfo);
+                    setPage('teacher');
+                } else {
+                    setUser(userInfo);
+                    setPage('practice');
+                }
+            };
+            
+            const handleLogout = useCallback(() => {
+                setUser(null);
+                setPage('login');
+                setResults(null);
+                setTotalRetries(0);
+                setSaveMessage(''); // FIX: Clear save message on logout
+            }, []);
+            
+            const handleRestart = useCallback(() => {
+                setPage('practice');
+                setResults(null);
+                setTotalRetries(prev => prev + 1);
+            }, []);
+
+            const handleCompleteAll = useCallback((finalResults) => {
+                setResults({...finalResults, totalRetries});
+                setPage('summary');
+            }, [totalRetries]);
+
+            const handleSave = useCallback(async (dataToSave) => {
+                if (!window.db) {
+                    setSaveMessage('Lỗi: Không thể kết nối tới cơ sở dữ liệu.');
+                    setTimeout(() => setSaveMessage(''), 3000);
+                    return;
+                }
+                
+                const { getFirestore, collection, addDoc, serverTimestamp } = window.firebase.firestore;
+                const db = getFirestore();
+                
+                try {
+                    const docRef = await addDoc(collection(db, `artifacts/${typeof __app_id !== 'undefined' ? __app_id : 'peptide-protein-app-vn'}/public/data/student_results`), {
+                        ...dataToSave,
+                        submittedAt: serverTimestamp()
+                    });
+                    console.log("Document written with ID: ", docRef.id);
+                    setSaveMessage('Kết quả của bạn đã được lưu thành công! Cảm ơn bạn đã tham gia.');
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    setSaveMessage('Đã có lỗi xảy ra khi lưu kết quả. Vui lòng thử lại.');
+                    setTimeout(() => setSaveMessage(''), 3000);
+                }
+            }, []);
+
+            if (saveMessage) {
+                return (
+                    <Modal onClose={handleLogout}>
+                        <div className="text-center">
+                            <h3 className="text-lg font-medium text-gray-900">{saveMessage.includes('thành công') ? 'Thành công!' : 'Lỗi'}</h3>
+                            <p className="mt-2 text-sm text-gray-600">{saveMessage}</p>
+                            <button onClick={handleLogout} className="mt-4 w-full bg-blue-500 text-white py-2 px-4 rounded-lg">Về trang chính</button>
+                        </div>
+                    </Modal>
+                );
+            }
+
+            switch (page) {
+                case 'practice':
+                    return <PracticePage user={user} onCompleteAll={handleCompleteAll} onLogout={handleLogout} />;
+                case 'summary':
+                    return <SummaryPage user={user} results={results} onRestart={handleRestart} onSave={handleSave} />;
+                case 'teacher':
+                    return <TeacherPage onLogout={handleLogout} />;
+                case 'login':
+                default:
+                    return <LoginPage onLogin={handleLogin} />;
+            }
+        }
+
+        // Render the app
+        window.renderApp = () => {
+            const root = ReactDOM.createRoot(document.getElementById('root'));
+            root.render(<App />);
+        };
+    </script>
+</body>
+</html>
